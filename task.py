@@ -2,28 +2,28 @@ import time
 from pathlib import Path
 from RPA.Browser.Selenium import Selenium
 from RPA.Excel.Files import Files
-from etl_tools import get_values
-
+from etl_tools import download_pdf, extract_from_pdf
 
 lib = Selenium()
 xl = Files()
 URL = 'https://itdashboard.gov/'
 AGENCY_NAME = 'National Science Foundation'
+WORKBOOK = 'spending_amounts.xlsx'
 output_dir = 'output'
 prefs = {
     'download.default_directory': str(Path(Path.cwd(), output_dir))
 }
 
 
-def open_the_website(url):
-    lib.open_chrome_browser(url=url)
+def open_the_website(url) -> None:
+    lib.open_chrome_browser(url=url, preferences=prefs)
 
 
-def click_dive_in():
+def click_dive_in() -> None:
     """Click "DIVE IN" on the homepage
     to reveal the spending amounts for each agency
     """
-    locator = 'css:.btn-lg-2x'
+    locator = 'xpath:/html/body/main/div[1]/div/div/div[3]/div/div/div/div/div/div/div/div/div/a'
     print('click_dive_in')
     lib.click_element(locator)
 
@@ -38,10 +38,10 @@ def extract_spending_amounts() -> list:
     return [(e[0], e[-1]) for e in data]
 
 
-def write_xls_file(data: list):
+def write_xls_file(data: list) -> None:
     """Write the amounts to an excel file and call the sheet "Agencies"
     """
-    xl.create_workbook('output/spending_amounts.xlsx')
+    xl.create_workbook(str(Path(output_dir, WORKBOOK)))
     xl.rename_worksheet('Sheet', 'Agencies')
     xl.set_cell_value(1, 1, 'Agencie')
     xl.set_cell_value(1, 2, 'Total FY2021 Spending')
@@ -49,21 +49,21 @@ def write_xls_file(data: list):
     xl.save_workbook()
 
 
-def click_agency(name: str):
+def click_agency(name: str) -> None:
     """select one of the agencies, for example, National Science Foundation    
     """
     locator = f'partial link:{name}'
     lib.click_element(locator)
 
 
-def get_cell_webelements() -> list:
-    """scrape table with all "Individual Investments" and write it to a new sheet in excel
+def get_row_webelements() -> list:
+    """scrape table with all "Individual Investments", capture table rows
     return list of webelements
     """
-    print('waiting for Individual Investments table')
+    print('wait for Individual Investments table')
     locator_1 = 'id:investments-table-object_wrapper'
     locator_2 = 'name:investments-table-object_length'
-    locator_3 = 'css:#investments-table-object > tbody > tr > td'
+    locator_3 = 'css:#investments-table-object > tbody > tr'
     lib.wait_until_element_is_visible(locator_1, 30)
     lib.select_from_list_by_value(locator_2, '-1')
     # wait for all table elements to be rendered
@@ -71,55 +71,41 @@ def get_cell_webelements() -> list:
     return lib.get_webelements(locator_3)
 
 
-def extract_text(cells) -> list:
-    """iterate over clee elements, extract text, return by rows
-    return [[cell[0], cell[1], ...], [...]]
+def get_link_from_uii(cell) -> str:
+    """capture UII cell link
+    recieve <class 'selenium.webdriver.remote.webelement.WebElement'> as argument
+    return 'link to the summary page' or '--' as an empty cell character
     """
-    txt = [lib.get_text(cell) for cell in cells]
-    row_length = 7
-    return [txt[i:i+row_length] for i in range(0, len(txt), row_length)]
+    a = cell.find_elements_by_tag_name('a')
+    return a[0].get_attribute('href') if a else '--'
 
 
-def write_table_to_workbook(data: list, agency_name: str = AGENCY_NAME):
-    """write table to a new sheet in excel
+def create_worksheet(agency_name: str) -> None:
+    """create new sheet in excel
     """
+    column_names = [['UII'], ['Bureau'], ['Investment Title'],
+                    ['Total FY2021 Spending ($M)'], ['Type'], ['CIO Rating'],
+                    ['# of Projects'], ['Link to Summary']]
     xl.create_worksheet(agency_name)
+    xl.append_rows_to_worksheet(column_names)
+
+
+def write_table_to_workbook(data: list) -> None:
+    """write table 
+    """
     xl.append_rows_to_worksheet(data)
     xl.save_workbook()
 
 
-def get_links_from_uii() -> list:
-    """capture UII cells links
-    return [str, str, ...]
+def compare_pdf_to_table(pdf_values: dict, table_row: list) -> None:
+    """compare the value "Name of this Investment" with the column "Investment Title",
+    and the value "Unique Investment Identifier (UII)" with the column "UII"
     """
-    locator = 'css:#investments-table-object > tbody > tr > td:nth-child(7n+1) > a'
-    anchors = lib.get_webelements(locator)
-    return [lib.get_element_attribute(a, 'href') for a in anchors]
-
-
-def download_pdf(links):
-    """open link, download pdf
-    """
-    locator = 'css:#business-case-pdf > a'
-    if links:
-        lib.open_chrome_browser(url=None, preferences=prefs)
-        for link in links:
-            lib.go_to(link)
-            lib.click_element_when_visible(locator)
-            time.sleep(20)
-        lib.close_browser()
-    else:
-        print('there are no links to download pdf')
-
-
-def match_values_to_table(values):
-    xl.open_workbook('output/spending_amounts.xlsx')
-    table = xl.read_worksheet(AGENCY_NAME)
-
-    for value in values:
-        for row in table:
-            if row['A'] == value[1] and row['C'] == value[0]:
-                print('the values match: ', *value)
+    a = pdf_values['name'] == table_row[2]
+    b = pdf_values['UII'] == table_row[0]
+    message = [f'"Name of this Investment" is expected to match "Investment Title": {a}',
+               f'"Unique Investment Identifier (UII)" is expected to match "UII": {b}']
+    print(*message, sep='\n')
 
 
 def main():
@@ -133,20 +119,29 @@ def main():
         write_xls_file(amounts)
 
         # extract table content
+        create_worksheet(AGENCY_NAME)
         click_agency(AGENCY_NAME)
-        cells = get_cell_webelements()
-        txt = extract_text(cells)
-        write_table_to_workbook(txt)
+        rows = get_row_webelements()
 
-        # if UII cell contains a link open it and download pdf
-        links = get_links_from_uii()
-        download_pdf(links)
+        # iterate over the table by rows, get text from every cell,
+        # get link from UII cell, use link to download pdf, compare values, write xlsx file
+        table_content = []
+        for row in rows:
+            row = row.find_elements_by_tag_name('td')
+            row_content = [lib.get_text(cell) for cell in row]
+            link = get_link_from_uii(row[0])
+            row_content.append(link)
+            table_content.append(row_content)
+            if link != '--':
+                download_pdf(link, lib)
+                # the pdf filename corresponds to a unique number known as the first column of the table
+                file_name = row_content[0] + '.pdf'
+                # open pdf, extract data
+                pdf_values = extract_from_pdf(str(Path(output_dir, file_name)))
+                compare_pdf_to_table(pdf_values, row_content)
 
-        # extract from pdf
-        pdf_files = [p for p in map(
-            str, Path(output_dir).iterdir()) if '.pdf' in p]
-        pdf_values = get_values(pdf_files)
-        match_values_to_table(pdf_values)
+        write_table_to_workbook(table_content)
+        print('done')
 
     finally:
         lib.close_all_browsers()
