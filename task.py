@@ -83,9 +83,9 @@ def get_link_from_uii(cell) -> str:
 def create_worksheet(agency_name: str) -> None:
     """create new sheet in excel
     """
-    column_names = [['UII'], ['Bureau'], ['Investment Title'],
-                    ['Total FY2021 Spending ($M)'], ['Type'], ['CIO Rating'],
-                    ['# of Projects'], ['Link to Summary']]
+    column_names = [['UII', 'Bureau', 'Investment Title',
+                     'Total FY2021 Spending ($M)', 'Type', 'CIO Rating',
+                     '# of Projects', 'Link to Summary']]
     xl.create_worksheet(agency_name)
     xl.append_rows_to_worksheet(column_names)
 
