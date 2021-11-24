@@ -12,23 +12,31 @@ class EtlTools:
         self.pdf = PDF()
         self.current = sys._getframe().f_code.co_name
 
-    def wait_for_the_download(self, output_dir: Path, timeout=30) -> None:
+    @staticmethod
+    def get_last_file(dir: Path) -> str:
+        """return name of the last modified file/directory or 'empty dir'
+        """
+        file_list = sorted([f for f in dir.iterdir()],
+                           key=lambda f: f.stat().st_mtime)
+        return file_list[-1].name if file_list else 'empty dir'
+
+    def wait_for_the_download(self, output_dir: Path, last_file: Path, timeout=30) -> None:
         """wait until the browser finishes to download a file
         """
         started, finished = False, False
-        self.logger.info(
-            f'wait for the download, timeout: {timeout} seconds...')
+        self.logger.info(f'wait for the download...')
         while not finished and timeout > 0:
-            last_file = sorted([f for f in output_dir.iterdir()],
-                               key=lambda f: f.stat().st_mtime)[-1]
-            if last_file.suffix == '.crdownload':
+            new_file = EtlTools.get_last_file(output_dir)
+            if '.crdownload' in new_file:
                 started = True
                 time.sleep(1)
                 timeout -= 1
             else:
                 time.sleep(1)
                 timeout -= 1
-            if started and last_file.suffix != '.crdownload':
+            if not '.crdownload' in new_file and started:
+                finished = True
+            if not '.crdownload' in new_file and new_file != last_file:
                 finished = True
             if timeout == 0:
                 raise Exception("download has not been finished")
@@ -37,6 +45,7 @@ class EtlTools:
         """open link in new window, click Download Business Case PDF
         """
         lib = self.lib
+        last_file = EtlTools.get_last_file(output_dir)
         lib.execute_javascript('window.open()')
         lib.switch_window(locator='NEW')
         lib.go_to(url)
@@ -44,7 +53,7 @@ class EtlTools:
         lib.wait_until_element_is_visible(locator, 30)
         self.logger.info(f'click "Download Business Case PDF" at: {url}')
         lib.click_element(locator)
-        self.wait_for_the_download(output_dir)
+        self.wait_for_the_download(output_dir, last_file)
         lib.close_window()
         lib.switch_window(locator='MAIN')
 
