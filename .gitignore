@@ -1,6 +1,8 @@
-sandbox.py
-testrun/
+*.log
+sandbox*.py
 output/
+
+testrun/
 venv/
 temp/
 .rpa/

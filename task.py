@@ -1,21 +1,25 @@
-import time
 from pathlib import Path
 from RPA.Browser.Selenium import Selenium
 from RPA.Excel.Files import Files
-from etl_tools import download_pdf, extract_from_pdf
+from etl_tools import EtlTools
+from logger import logger, ctx_message
+
 
 lib = Selenium()
 xl = Files()
+logger = logger('task.log', Path(__file__).name)
+etl = EtlTools(lib, logger)
 URL = 'https://itdashboard.gov/'
 AGENCY_NAME = 'National Science Foundation'
 WORKBOOK = 'spending_amounts.xlsx'
 output_dir = 'output'
+output_dir = Path(Path.cwd(), output_dir)
 prefs = {
-    'download.default_directory': str(Path(Path.cwd(), output_dir))
+    'download.default_directory': str(output_dir)
 }
 
 
-def open_the_website(url) -> None:
+def open_the_website(url: str) -> None:
     lib.open_chrome_browser(url=url, preferences=prefs)
 
 
@@ -23,25 +27,31 @@ def click_dive_in() -> None:
     """Click "DIVE IN" on the homepage
     to reveal the spending amounts for each agency
     """
-    locator = 'xpath:/html/body/main/div[1]/div/div/div[3]/div/div/div/div/div/div/div/div/div/a'
-    print('click_dive_in')
-    lib.click_element(locator)
+    locator = 'link:DIVE IN'
+    logger.info(ctx_message('click on "DIVE IN" button'))
+    lib.click_link(locator)
 
 
 def extract_spending_amounts() -> list:
-    """extract spending amounts for each agency
+    """wait untill all widget elements appear
+    extract spending amounts for each agency
     return [(agency, amount), ...]
     """
-    locator = 'xpath: //*[contains(text(), "Total FY2021 Spending:")]'
-    elements = lib.get_webelements(locator)
+    locator_1 = 'id:agency-tiles-widget'
+    last_widget = 'css:#agency-tiles-widget > div:nth-child(1) > div:nth-child(9) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(2) > a:nth-child(1) > span:nth-child(1)'
+    lib.wait_until_element_is_visible(last_widget)
+    container = lib.get_webelement(locator_1)
+    elements = container.find_elements_by_partial_link_text(
+        'Total FY2021 Spending')
     data = [lib.get_text(e).split('\n') for e in elements]
+    logger.info(ctx_message(f'number of entries: {len(data)}'))
     return [(e[0], e[-1]) for e in data]
 
 
 def write_xls_file(data: list) -> None:
     """Write the amounts to an excel file and call the sheet "Agencies"
     """
-    xl.create_workbook(str(Path(output_dir, WORKBOOK)))
+    xl.create_workbook(Path(output_dir, WORKBOOK).resolve())
     xl.rename_worksheet('Sheet', 'Agencies')
     xl.set_cell_value(1, 1, 'Agencie')
     xl.set_cell_value(1, 2, 'Total FY2021 Spending')
@@ -50,8 +60,9 @@ def write_xls_file(data: list) -> None:
 
 
 def click_agency(name: str) -> None:
-    """select one of the agencies, for example, National Science Foundation    
+    """select one of the agencies, for example, National Science Foundation
     """
+    logger.info(ctx_message(f'click on {name}'))
     locator = f'partial link:{name}'
     lib.click_element(locator)
 
@@ -60,15 +71,29 @@ def get_row_webelements() -> list:
     """scrape table with all "Individual Investments", capture table rows
     return list of webelements
     """
-    print('wait for Individual Investments table')
+    url = lib.get_location()
+    logger.info(ctx_message(
+        f'processing Individual Investments table at {url}'))
     locator_1 = 'id:investments-table-object_wrapper'
     locator_2 = 'name:investments-table-object_length'
     locator_3 = 'css:#investments-table-object > tbody > tr'
+
     lib.wait_until_element_is_visible(locator_1, 30)
+    max_number = int(''.join(lib.get_text(
+        'css:#investments-table-object_info').split()[-2].split(',')))
+    last_row = f'css:tr:nth-child({max_number})'
     lib.select_from_list_by_value(locator_2, '-1')
-    # wait for all table elements to be rendered
-    time.sleep(30)
-    return lib.get_webelements(locator_3)
+
+    # wait either until the exact number of entries is displayed,
+    # or the timeout expires before they all appear.
+    lib.wait_until_element_is_visible(last_row, 30)
+    data = lib.get_webelements(locator_3)
+    received_rows = len(data)
+    if received_rows != max_number:
+        logger.warning('wrong number of rows extracted: expected: {}, received: {}'.format(
+            url, max_number, received_rows))
+    logger.info(ctx_message(f'extracted {received_rows} rows'))
+    return data
 
 
 def get_link_from_uii(cell) -> str:
@@ -91,7 +116,7 @@ def create_worksheet(agency_name: str) -> None:
 
 
 def write_table_to_workbook(data: list) -> None:
-    """write table 
+    """write table
     """
     xl.append_rows_to_worksheet(data)
     xl.save_workbook()
@@ -103,18 +128,20 @@ def compare_pdf_to_table(pdf_values: dict, table_row: list) -> None:
     """
     a = pdf_values['name'] == table_row[2]
     b = pdf_values['UII'] == table_row[0]
+    if not a or not b:
+        logger.warning(ctx_message('values did not match'))
     message = [f'"Name of this Investment" is expected to match "Investment Title": {a}',
                f'"Unique Investment Identifier (UII)" is expected to match "UII": {b}']
-    print(*message, sep='\n')
+    logger.info(ctx_message('\n'.join(message)))
 
 
 def main():
+    logger.info('Started')
     try:
         open_the_website(URL)
 
         # get agencies total spendings
         click_dive_in()
-        lib.wait_until_element_is_visible('id:agency-tiles-widget')
         amounts = extract_spending_amounts()
         write_xls_file(amounts)
 
@@ -133,15 +160,16 @@ def main():
             row_content.append(link)
             table_content.append(row_content)
             if link != '--':
-                download_pdf(link, lib)
+                etl.download_pdf(link, output_dir)
                 # the pdf filename corresponds to a unique number known as the first column of the table
                 file_name = row_content[0] + '.pdf'
                 # open pdf, extract data
-                pdf_values = extract_from_pdf(str(Path(output_dir, file_name)))
+                pdf_values = etl.extract_from_pdf(
+                    Path(output_dir, file_name).resolve())
                 compare_pdf_to_table(pdf_values, row_content)
 
         write_table_to_workbook(table_content)
-        print('done')
+        logger.info('Finished')
 
     finally:
         lib.close_all_browsers()

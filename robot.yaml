@@ -10,3 +10,5 @@ PYTHONPATH:
   - .
 ignoreFiles:
   - .gitignore
+  - sandbox_1.py
+  - sandbox.py
