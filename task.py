@@ -37,12 +37,11 @@ def extract_spending_amounts() -> list:
     extract spending amounts for each agency
     return [(agency, amount), ...]
     """
-    locator_1 = 'id:agency-tiles-widget'
-    last_widget = 'css:#agency-tiles-widget > div:nth-child(1) > div:nth-child(9) > div:nth-child(2) > div:nth-child(1) > div:nth-child(1) > div:nth-child(1) > div:nth-child(2) > a:nth-child(1) > span:nth-child(1)'
-    lib.wait_until_element_is_visible(last_widget)
-    container = lib.get_webelement(locator_1)
-    elements = container.find_elements_by_partial_link_text(
-        'Total FY2021 Spending')
+    widget = 'css:#agency-tiles-widget .col-sm-12 > div:nth-child(2) > a'
+    number_of_widgets = 26
+    lib.wait_until_page_contains_element(
+        locator=widget, timeout=30, limit=number_of_widgets)
+    elements = lib.get_webelements(widget)
     data = [lib.get_text(e).split('\n') for e in elements]
     logger.info(ctx_message(f'number of entries: {len(data)}'))
     return [(e[0], e[-1]) for e in data]
