@@ -37,14 +37,16 @@ def extract_spending_amounts() -> list:
     extract spending amounts for each agency
     return [(agency, amount), ...]
     """
-    widget = 'css:#agency-tiles-widget .col-sm-12 > div:nth-child(2) > a'
-    number_of_widgets = 26
-    lib.wait_until_page_contains_element(
-        locator=widget, timeout=30, limit=number_of_widgets)
+    widget = 'css:#agency-tiles-widget .col-sm-12 > div:nth-child(2)'
+    lib.wait_until_element_is_visible(widget)
     elements = lib.get_webelements(widget)
-    data = [lib.get_text(e).split('\n') for e in elements]
+
+    def func(s: str) -> tuple:
+        lst = s.split('\n')
+        return lst[0], lst[-1]
+    data = [func(lib.get_text(e)) for e in elements]
     logger.info(ctx_message(f'number of entries: {len(data)}'))
-    return [(e[0], e[-1]) for e in data]
+    return data
 
 
 def write_xls_file(data: list) -> None:
@@ -125,13 +127,41 @@ def compare_pdf_to_table(pdf_values: dict, table_row: list) -> None:
     """compare the value "Name of this Investment" with the column "Investment Title",
     and the value "Unique Investment Identifier (UII)" with the column "UII"
     """
-    a = pdf_values['name'] == table_row[2]
-    b = pdf_values['UII'] == table_row[0]
-    if not a or not b:
-        logger.warning(ctx_message('values did not match'))
-    message = [f'"Name of this Investment" is expected to match "Investment Title": {a}',
-               f'"Unique Investment Identifier (UII)" is expected to match "UII": {b}']
-    logger.info(ctx_message('\n'.join(message)))
+    if pdf_values['name'] == table_row[2]:
+        logger.info(ctx_message(
+            '"Name of this Investment" and "Investment Title": the values match'))
+    else:
+        logger.warning(ctx_message(
+            f'the values do NOT match, pdf value "Name of this Investment":{pdf_values["name"]}, table value "Investment Title":{table_row[2]}'))
+    if pdf_values['UII'] == table_row[0]:
+        logger.info(ctx_message(
+            '"Unique Investment Identifier (UII)" and "UII": the values match'))
+    else:
+        logger.warning(ctx_message(
+            f'the values do NOT match, pdf value "Unique Investment Identifier (UII)":{pdf_values["UII"]}, table value "UII":{table_row[0]}'))
+
+
+def process_table(rows: list) -> list:
+    """iterate over the table by rows, get text from every cell,
+    get link from UII cell, use link to download pdf, compare values, write xlsx file
+    return content of the table as list
+    """
+    table_content = []
+    for row in rows:
+        row = row.find_elements_by_tag_name('td')
+        row_content = [lib.get_text(cell) for cell in row]
+        link = get_link_from_uii(row[0])
+        row_content.append(link)
+        table_content.append(row_content)
+        if link != '--':
+            etl.download_pdf(link, output_dir)
+            # the pdf filename corresponds to a unique number known as the first column of the table
+            file_name = row_content[0] + '.pdf'
+            # open pdf, extract data
+            pdf_values = etl.extract_from_pdf(
+                Path(output_dir, file_name).resolve())
+            compare_pdf_to_table(pdf_values, row_content)
+    return table_content
 
 
 def main():
@@ -148,25 +178,7 @@ def main():
         create_worksheet(AGENCY_NAME)
         click_agency(AGENCY_NAME)
         rows = get_row_webelements()
-
-        # iterate over the table by rows, get text from every cell,
-        # get link from UII cell, use link to download pdf, compare values, write xlsx file
-        table_content = []
-        for row in rows:
-            row = row.find_elements_by_tag_name('td')
-            row_content = [lib.get_text(cell) for cell in row]
-            link = get_link_from_uii(row[0])
-            row_content.append(link)
-            table_content.append(row_content)
-            if link != '--':
-                etl.download_pdf(link, output_dir)
-                # the pdf filename corresponds to a unique number known as the first column of the table
-                file_name = row_content[0] + '.pdf'
-                # open pdf, extract data
-                pdf_values = etl.extract_from_pdf(
-                    Path(output_dir, file_name).resolve())
-                compare_pdf_to_table(pdf_values, row_content)
-
+        table_content = process_table(rows)
         write_table_to_workbook(table_content)
         logger.info('Finished')
 
